@@ -1557,222 +1557,293 @@
   </footer>
 
   <script>
-    // ─── STATE ───
-    let allProducts = [];
-    let filteredProducts = [];
-    let cart = {};
-    let wishlist = new Set();
-    let activeCategory = 'all';
+  // ─── STATE ───
+  let allProducts = [];
+  let filteredProducts = [];
+  let cart = {};
+  let wishlist = new Set();
+  let activeCategory = 'all';
 
-    // ─── FETCH DATA ───
-    async function fetchProducts() {
-      try {
-        const res = await fetch('https://dummyjson.com/products?limit=30');
-        const data = await res.json();
-        allProducts = data.products;
-        filteredProducts = [...allProducts];
-        document.getElementById('statProducts').textContent = data.total + '+';
-        buildCategoryTabs();
-        renderProducts();
-      } catch (e) {
-        document.getElementById('productsGrid').innerHTML =
-          `<p style="grid-column:1/-1;text-align:center;color:var(--muted);padding:3rem">Failed to load products. Please try again.</p>`;
-      }
-    }
+  let displayLimit = 20;
 
-    // ─── BUILD CATEGORY TABS ───
-    function buildCategoryTabs() {
-      const cats = ['all', ...new Set(allProducts.map(p => p.category))];
-      const tabs = document.getElementById('filterTabs');
-      tabs.innerHTML = cats.map(c =>
-        `<button class="filter-tab ${c === 'all' ? 'active' : ''}" onclick="setCategory('${c}', this)">
-          ${c === 'all' ? 'All' : capitalise(c)}
-        </button>`
-      ).join('');
-    }
+  // ─── FETCH PRODUCTS ───
+  async function fetchProducts() {
+    try {
+      let res = await fetch('https://dummyjson.com/products?limit=0');
+      if (!res.ok) throw new Error('limit=0 failed');
+      const data = await res.json();
 
-    function capitalise(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+      if (!data.products || data.products.length === 0) throw new Error('Empty response');
 
-    function setCategory(cat, el) {
-      activeCategory = cat;
-      document.querySelectorAll('.filter-tab').forEach(t => t.classList.remove('active'));
-      el.classList.add('active');
-      applyFilters();
-    }
-
-    function filterProducts() {
-      applyFilters();
-    }
-
-    function applyFilters() {
-      const q = document.getElementById('searchInput').value.toLowerCase();
-      filteredProducts = allProducts.filter(p => {
-        const matchCat = activeCategory === 'all' || p.category === activeCategory;
-        const matchQ = !q || p.title.toLowerCase().includes(q) || p.category.toLowerCase().includes(q);
-        return matchCat && matchQ;
-      });
+      allProducts = data.products;
+      filteredProducts = [...allProducts];
+      document.getElementById('statProducts').textContent = data.total + '+';
+      buildCategoryTabs();
       renderProducts();
+    } catch (e) {
+      try {
+        await fetchAllChunked();
+      } catch (e2) {
+        document.getElementById('productsGrid').innerHTML =
+          `<div style="grid-column:1/-1;text-align:center;padding:3rem">
+            <p style="color:var(--muted);margin-bottom:1rem">⚠️ Could not reach DummyJSON API.</p>
+            <button class="btn-primary" onclick="fetchProducts()">Retry</button>
+          </div>`;
+      }
+    }
+  }
+
+  async function fetchAllChunked() {
+    const pageSize = 100;
+    const first = await fetch(`https://dummyjson.com/products?limit=${pageSize}&skip=0`);
+    const firstData = await first.json();
+    const total = firstData.total;
+    let products = [...firstData.products];
+
+    const remaining = [];
+    for (let skip = pageSize; skip < total; skip += pageSize) {
+      remaining.push(fetch(`https://dummyjson.com/products?limit=${pageSize}&skip=${skip}`).then(r => r.json()));
+    }
+    const pages = await Promise.all(remaining);
+    pages.forEach(p => { products = products.concat(p.products); });
+
+    allProducts = products;
+    filteredProducts = [...allProducts];
+    document.getElementById('statProducts').textContent = total + '+';
+    buildCategoryTabs();
+    renderProducts();
+  }
+
+  // ─── CATEGORY TABS ───
+  function buildCategoryTabs() {
+    const cats = ['all', ...new Set(allProducts.map(p => p.category))];
+    const tabs = document.getElementById('filterTabs');
+    tabs.innerHTML = cats.map(c =>
+      `<button class="filter-tab ${c === 'all' ? 'active' : ''}" onclick="setCategory('${c}', this)">
+        ${c === 'all' ? 'All' : capitalise(c)}
+      </button>`
+    ).join('');
+  }
+
+  function capitalise(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+
+  function setCategory(cat, el) {
+    activeCategory = cat;
+    document.querySelectorAll('.filter-tab').forEach(t => t.classList.remove('active'));
+    el.classList.add('active');
+    applyFilters();
+  }
+
+  function applyFilters() {
+    const q = document.getElementById('searchInput').value.toLowerCase();
+    filteredProducts = allProducts.filter(p => {
+      const matchCat = activeCategory === 'all' || p.category === activeCategory;
+      const matchQ = !q || p.title.toLowerCase().includes(q) || p.category.toLowerCase().includes(q);
+      return matchCat && matchQ;
+    });
+
+    const bar = document.getElementById('loadMoreBar');
+    if (bar) bar.style.width = '0%';
+    renderProducts(true);
+  }
+
+  // ─── RENDER PRODUCTS ───
+  function renderProducts(reset = true) {
+    if (reset) displayLimit = 20;
+    const grid = document.getElementById('productsGrid');
+    const loadMoreWrap = document.getElementById('loadMoreWrap');
+
+    if (!filteredProducts.length) {
+      grid.innerHTML = `<p style="grid-column:1/-1;text-align:center;color:var(--muted);padding:3rem">No products found.</p>`;
+      if (loadMoreWrap) loadMoreWrap.style.display = 'none';
+      return;
     }
 
-    // ─── RENDER PRODUCTS ───
-    function renderProducts() {
-      const grid = document.getElementById('productsGrid');
-      if (!filteredProducts.length) {
-        grid.innerHTML = `<p style="grid-column:1/-1;text-align:center;color:var(--muted);padding:3rem">No products found.</p>`;
-        return;
-      }
-      grid.innerHTML = filteredProducts.map((p, i) => {
-        const stars = '★'.repeat(Math.round(p.rating)) + '☆'.repeat(5 - Math.round(p.rating));
-        const orig = (p.price / (1 - p.discountPercentage / 100)).toFixed(2);
-        const isWished = wishlist.has(p.id);
-        return `
-        <div class="product-card" style="animation-delay:${i * 0.04}s" onclick="openProduct(${p.id})">
-          <div class="product-img-wrap">
-            <img src="${p.thumbnail}" alt="${p.title}" loading="lazy">
-            ${p.discountPercentage > 5 ? `<span class="product-badge sale">-${Math.round(p.discountPercentage)}%</span>` : ''}
-            <button class="wishlist-btn ${isWished ? 'active' : ''}" onclick="toggleWishlist(event,${p.id})" title="Wishlist">
-              <svg viewBox="0 0 24 24" fill="${isWished ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2">
-                <path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/>
+    const visible = filteredProducts.slice(0, displayLimit);
+    grid.innerHTML = visible.map((p, i) => {
+      const stars = '★'.repeat(Math.round(p.rating)) + '☆'.repeat(5 - Math.round(p.rating));
+      const orig = (p.price / (1 - p.discountPercentage / 100)).toFixed(2);
+      const isWished = wishlist.has(p.id);
+      return `
+      <div class="product-card" style="animation-delay:${(i % 20) * 0.04}s" onclick="openProduct(${p.id})">
+        <div class="product-img-wrap">
+          <img src="${p.thumbnail}" alt="${p.title}" loading="lazy">
+          ${p.discountPercentage > 5 ? `<span class="product-badge sale">-${Math.round(p.discountPercentage)}%</span>` : ''}
+          <button class="wishlist-btn ${isWished ? 'active' : ''}" onclick="toggleWishlist(event,${p.id})" title="Wishlist">
+            <svg viewBox="0 0 24 24" fill="${isWished ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2">
+              <path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/>
+            </svg>
+          </button>
+        </div>
+        <div class="product-info">
+          <div class="product-category">${p.category}</div>
+          <div class="product-name">${p.title}</div>
+          <div class="product-rating">
+            <span class="stars">${stars}</span>
+            <span class="rating-count">(${p.rating})</span>
+          </div>
+          <div class="product-footer">
+            <div class="product-price">
+              <span class="old-price">$${orig}</span>$${p.price.toFixed(2)}
+            </div>
+            <button class="add-to-cart" id="btn-${p.id}" onclick="addToCart(event, ${p.id})">
+              <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
               </svg>
+              Add
             </button>
           </div>
-          <div class="product-info">
-            <div class="product-category">${p.category}</div>
-            <div class="product-name">${p.title}</div>
-            <div class="product-rating">
-              <span class="stars">${stars}</span>
-              <span class="rating-count">(${p.rating})</span>
-            </div>
-            <div class="product-footer">
-              <div class="product-price">
-                <span class="old-price">$${orig}</span>$${p.price.toFixed(2)}
-              </div>
-              <button class="add-to-cart" id="btn-${p.id}" onclick="addToCart(event, ${p.id})">
-                <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
-                  <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
-                </svg>
-                Add
-              </button>
+        </div>
+      </div>`;
+    }).join('');
+
+    if (loadMoreWrap) {
+      if (displayLimit < filteredProducts.length) {
+        loadMoreWrap.style.display = 'flex';
+        document.getElementById('loadMoreCount').textContent =
+          `Showing ${visible.length} of ${filteredProducts.length} products`;
+      } else {
+        loadMoreWrap.style.display = 'none';
+      }
+    }
+  }
+
+  function loadMore() {
+    displayLimit += 20;
+    renderProducts(false);
+    const pct = Math.min((displayLimit / filteredProducts.length) * 100, 100);
+    const bar = document.getElementById('loadMoreBar');
+    if (bar) bar.style.width = pct + '%';
+  }
+
+  // ─── CART ───
+  function addToCart(e, id) {
+    e.stopPropagation();
+    const p = allProducts.find(x => x.id === id);
+    if (!p) return;
+    if (cart[id]) { cart[id].qty++; } 
+    else { cart[id] = { ...p, qty: 1 }; }
+    updateCartUI();
+
+    const btn = document.getElementById(`btn-${id}`);
+    if (btn) {
+      btn.classList.add('added');
+      btn.textContent = '✓ Added';
+      setTimeout(() => {
+        btn.classList.remove('added');
+        btn.innerHTML = `<svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Add`;
+      }, 1400);
+    }
+
+    showToast(`🛍️ "${p.title.slice(0,30)}…" added to cart`);
+  }
+
+  function removeFromCart(id) { delete cart[id]; updateCartUI(); }
+  function changeQty(id, delta) {
+    if (!cart[id]) return;
+    cart[id].qty += delta;
+    if (cart[id].qty <= 0) delete cart[id];
+    updateCartUI();
+  }
+
+  function updateCartUI() {
+    const items = Object.values(cart);
+    const total = items.reduce((s, i) => s + i.price * i.qty, 0);
+    const count = items.reduce((s, i) => s + i.qty, 0);
+    document.getElementById('cartCount').textContent = count;
+
+    const cartItemsEl = document.getElementById('cartItems');
+    const cartFooter = document.getElementById('cartFooter');
+
+    if (!items.length) {
+      cartItemsEl.innerHTML = `
+        <div class="cart-empty">
+          <svg width="48" height="48" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+            <path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/>
+            <line x1="3" y1="6" x2="21" y2="6"/>
+            <path d="M16 10a4 4 0 01-8 0"/>
+          </svg>
+          <p>Your cart is empty</p>
+          <span>Add some items to get started</span>
+        </div>`;
+      cartFooter.style.display = 'none';
+    } else {
+      cartItemsEl.innerHTML = items.map(i => `
+        <div class="cart-item">
+          <img src="${i.thumbnail}" alt="${i.title}">
+          <div class="cart-item-info">
+            <div class="cart-item-name">${i.title}</div>
+            <div class="cart-item-price">$${(i.price * i.qty).toFixed(2)}</div>
+            <div class="cart-item-qty">
+              <button class="qty-btn" onclick="changeQty(${i.id}, -1)">−</button>
+              <span class="qty-val">${i.qty}</span>
+              <button class="qty-btn" onclick="changeQty(${i.id}, 1)">+</button>
+              <button class="remove-item" onclick="removeFromCart(${i.id})">Remove</button>
             </div>
           </div>
-        </div>`;
-      }).join('');
+        </div>`).join('');
+      document.getElementById('cartTotal').textContent = `$${total.toFixed(2)}`;
+      cartFooter.style.display = 'block';
+    }
+  }
+
+  function openCart() {
+    document.getElementById('cartSidebar').classList.add('open');
+    document.getElementById('cartOverlay').classList.add('open');
+  }
+  function closeCart() {
+    document.getElementById('cartSidebar').classList.remove('open');
+    document.getElementById('cartOverlay').classList.remove('open');
+  }
+
+  // ─── WISHLIST (fixed: no full re-render) ───
+  function toggleWishlist(e, id) {
+    e.stopPropagation();
+    const btn = e.currentTarget;
+    if (wishlist.has(id)) {
+      wishlist.delete(id);
+      showToast('💔 Removed from wishlist');
+      btn.classList.remove('active');
+    } else {
+      wishlist.add(id);
+      showToast('❤️ Added to wishlist');
+      btn.classList.add('active');
     }
 
-    // ─── CART ───
-    function addToCart(e, id) {
-      e.stopPropagation();
-      const p = allProducts.find(x => x.id === id);
-      if (!p) return;
-      if (cart[id]) { cart[id].qty++; }
-      else { cart[id] = { ...p, qty: 1 }; }
-      updateCartUI();
-      const btn = document.getElementById(`btn-${id}`);
-      if (btn) {
-        btn.classList.add('added');
-        btn.textContent = '✓ Added';
-        setTimeout(() => { btn.classList.remove('added'); btn.innerHTML = `<svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Add`; }, 1400);
-      }
-      showToast(`🛍️ "${p.title.slice(0,30)}…" added to cart`);
+    const svg = btn.querySelector('svg');
+    if (svg) svg.setAttribute('fill', wishlist.has(id) ? 'currentColor' : 'none');
+  }
+
+  // ─── TOAST ───
+  let toastTimer;
+  function showToast(msg) {
+    clearTimeout(toastTimer);
+    const t = document.getElementById('toast');
+    document.getElementById('toastMsg').textContent = msg;
+    t.classList.add('show');
+    toastTimer = setTimeout(() => t.classList.remove('show'), 2800);
+  }
+
+  // ─── PRODUCT CLICK (simple modal-less detail) ───
+  function openProduct(id) {
+    const p = allProducts.find(x => x.id === id);
+    if (!p) return;
+    showToast(`👁️ Viewing: ${p.title.slice(0,40)}`);
+  }
+
+  // ─── NEWSLETTER ───
+  function subscribeNewsletter() {
+    const email = document.getElementById('newsletterEmail').value.trim();
+    if (!email || !email.includes('@')) {
+      showToast('⚠️ Please enter a valid email address');
+      return;
     }
+    showToast(`✅ Welcome! ${email} subscribed successfully`);
+    document.getElementById('newsletterEmail').value = '';
+  }
 
-    function removeFromCart(id) {
-      delete cart[id];
-      updateCartUI();
-    }
-
-    function changeQty(id, delta) {
-      if (!cart[id]) return;
-      cart[id].qty += delta;
-      if (cart[id].qty <= 0) delete cart[id];
-      updateCartUI();
-    }
-
-    function updateCartUI() {
-      const items = Object.values(cart);
-      const total = items.reduce((s, i) => s + i.price * i.qty, 0);
-      const count = items.reduce((s, i) => s + i.qty, 0);
-      document.getElementById('cartCount').textContent = count;
-
-      const cartItemsEl = document.getElementById('cartItems');
-      const cartFooter = document.getElementById('cartFooter');
-
-      if (!items.length) {
-        cartItemsEl.innerHTML = `
-          <div class="cart-empty">
-            <svg width="48" height="48" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
-              <path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/>
-              <line x1="3" y1="6" x2="21" y2="6"/>
-              <path d="M16 10a4 4 0 01-8 0"/>
-            </svg>
-            <p>Your cart is empty</p>
-            <span>Add some items to get started</span>
-          </div>`;
-        cartFooter.style.display = 'none';
-      } else {
-        cartItemsEl.innerHTML = items.map(i => `
-          <div class="cart-item">
-            <img src="${i.thumbnail}" alt="${i.title}">
-            <div class="cart-item-info">
-              <div class="cart-item-name">${i.title}</div>
-              <div class="cart-item-price">$${(i.price * i.qty).toFixed(2)}</div>
-              <div class="cart-item-qty">
-                <button class="qty-btn" onclick="changeQty(${i.id}, -1)">−</button>
-                <span class="qty-val">${i.qty}</span>
-                <button class="qty-btn" onclick="changeQty(${i.id}, 1)">+</button>
-                <button class="remove-item" onclick="removeFromCart(${i.id})">Remove</button>
-              </div>
-            </div>
-          </div>`).join('');
-        document.getElementById('cartTotal').textContent = `$${total.toFixed(2)}`;
-        cartFooter.style.display = 'block';
-      }
-    }
-
-    function openCart() {
-      document.getElementById('cartSidebar').classList.add('open');
-      document.getElementById('cartOverlay').classList.add('open');
-    }
-    function closeCart() {
-      document.getElementById('cartSidebar').classList.remove('open');
-      document.getElementById('cartOverlay').classList.remove('open');
-    }
-
-    // ─── WISHLIST ───
-    function toggleWishlist(e, id) {
-      e.stopPropagation();
-      if (wishlist.has(id)) { wishlist.delete(id); showToast('💔 Removed from wishlist'); }
-      else { wishlist.add(id); showToast('❤️ Added to wishlist'); }
-      renderProducts();
-    }
-
-    // ─── TOAST ───
-    let toastTimer;
-    function showToast(msg) {
-      clearTimeout(toastTimer);
-      const t = document.getElementById('toast');
-      document.getElementById('toastMsg').textContent = msg;
-      t.classList.add('show');
-      toastTimer = setTimeout(() => t.classList.remove('show'), 2800);
-    }
-
-    // ─── PRODUCT CLICK (simple modal-less detail) ───
-    function openProduct(id) {
-      const p = allProducts.find(x => x.id === id);
-      if (!p) return;
-      showToast(`👁️ Viewing: ${p.title.slice(0,40)}`);
-    }
-
-    // ─── NEWSLETTER ───
-    function subscribeNewsletter() {
-      const email = document.getElementById('newsletterEmail').value.trim();
-      if (!email || !email.includes('@')) { showToast('⚠️ Please enter a valid email address'); return; }
-      showToast(`✅ Welcome! ${email} subscribed successfully`);
-      document.getElementById('newsletterEmail').value = '';
-    }
-
-    // ─── INIT ───
-    fetchProducts();
-  </script>
+  // ─── INIT ───
+  fetchProducts();
+</script>
 </body>
 </html>
